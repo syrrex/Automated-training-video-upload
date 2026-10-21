@@ -5,7 +5,7 @@ splits them into sessions by the pauses between clips, lets a coach name each se
 a touchscreen (Team, Skelly, Red Zone, …) and uploads every session to Hudl as its own
 playlist, e.g. `2026-10-20 - Red Zone`. Cards are only read, never changed.
 
-It runs on a Raspberry Pi with two card readers (one per camera) and a touchscreen, but
+It runs on a Raspberry Pi 4 with two card readers (one per camera) and a touchscreen, but
 everything can be tried on a normal PC first.
 
 | File | What it does |
@@ -150,19 +150,30 @@ python hudl_upload.py upload some_folder --dry-run      # only list the clips
 
 ### Hardware
 
-- Raspberry Pi 5 (4 GB), official 27 W USB-C power supply, Active Cooler or case with fan
-- Raspberry Pi Touch Display 2 (5" or 7"), connected with the ribbon cable (DSI), set to
-  landscape; the screen is drawn at 800x480 and scaled
+- **Raspberry Pi 4 (4 GB)** – a Pi 5 also works and is a bit faster, but the slow part is
+  the upload to Hudl, which depends on the internet. Not the 2 GB version: the browser
+  that does the upload needs the memory.
+- Official Raspberry Pi 15 W USB-C power supply (Pi 4) or 27 W (Pi 5)
+- **Raspberry Pi Touch Display 2, 7"** (5" works too, but the buttons get small), connected
+  with the ribbon cable (DSI) – check that the cable for your Pi model is included. Set to
+  landscape; the screen is drawn at 800x480 and scaled. It is powered from the Pi's 5V
+  pins (2 or 4) and GND.
+- **A case for the touchscreen** that holds the Pi on its back (search for "Touch Display 2
+  case", or 3D-print one). The card readers and the drive hang on short USB cables, so
+  they can sit in or next to the case; label the readers "Inside Run" and "Team".
 - microSD card 32 GB for the system
-- USB HDD for the clips, e.g. 1 TB 2.5" (powered over USB). One practice is about
-  0.4 GB, so it holds years of practices.
-- 2 USB card readers for the cameras' cards (label them "Inside Run" and "Team").
-  The HDD goes in a blue USB 3 port, so one reader uses a black USB 2 port (fast enough).
-- 3 LEDs (2 green, 1 blue) with 220 Ω resistors, 1 active 3.3 V buzzer
+- Drive for the clips: a **USB SSD** (e.g. 500 GB), or a USB HDD **with its own power
+  supply**. One practice is about 0.4 GB. The Pi 4 can only power 1.2 A over all USB ports
+  together – two card readers plus a bus-powered 2.5" HDD can be too much.
+- 2 USB card readers for the cameras' cards. The drive goes in a blue USB 3 port, so one
+  reader uses a black USB 2 port (fast enough).
+- Optional: 1 active 3.3 V buzzer ("remove the card" beep) and 3 LEDs with 220 Ω
+  resistors. The touchscreen already shows the same status, so the LEDs can be left out.
 - Network: Wi-Fi works (a normal password, no login page in the browser); an Ethernet
   cable is more reliable if there is a socket
 
-Wiring (BCM numbers, LED long leg → resistor → GPIO, short leg → GND):
+Wiring of the optional LEDs/buzzer (BCM numbers, LED long leg → resistor → GPIO, short
+leg → GND). Pins 4 and 6 are taken by the touchscreen's power:
 
 | Part | GPIO | Pin |
 |---|---|---|
@@ -170,11 +181,11 @@ Wiring (BCM numbers, LED long leg → resistor → GPIO, short leg → GND):
 | LED reader 2 (Team) | 27 | 13 |
 | Blue LED (upload) | 23 | 16 |
 | Buzzer + | 24 | 18 |
-| GND | - | 6, 9, 14… |
+| GND | - | 9, 14, 20… |
 
-### Status lights
+### Status lights (optional)
 
-One green LED next to each reader:
+The touchscreen shows the status; the LEDs only repeat it. One green LED next to each reader:
 
 | Light | Meaning |
 |---|---|
@@ -195,7 +206,7 @@ Blue LED:
    Wi-Fi and SSH in the Imager settings. (Other user name → change paths in `kiosk.service`.)
 2. Get the code: `git clone https://github.com/syrrex/Automated-training-video-upload.git ~/kiosk`
 3. System packages: `sudo apt install ffmpeg`.
-   Archive HDD: format it with the name `KIOSKHDD` (the kiosk never treats a drive with
+   Archive drive (SSD or HDD): format it with the name `KIOSKHDD` (the kiosk never treats a drive with
    that name as an SD card) and mount it at `/mnt/archive`:
    ```bash
    lsblk                                       # find the HDD, e.g. /dev/sda
