@@ -9,7 +9,9 @@ RequiresMountsFor=/mnt/archive
 # Runs as root because mounting SD cards needs it.
 WorkingDirectory=/home/pi/kiosk
 Environment=PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
-ExecStart=/home/pi/kiosk-venv/bin/python -u kiosk.py --archive /mnt/archive
+# touchscreen without a desktop: draw directly on the display
+Environment=SDL_VIDEODRIVER=kmsdrm
+ExecStart=/home/pi/kiosk-venv/bin/python -u kiosk.py --archive /mnt/archive --gui --fullscreen
 Restart=always
 RestartSec=10
 

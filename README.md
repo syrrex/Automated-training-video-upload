@@ -5,15 +5,21 @@ Two card readers,  one per camera. Insert the SD cards → clips are copied to t
 → each session is uploaded to Hudl as its own upload (video type Practice, linked to
 the Preseason event). Cards are only read, never changed.
 
-Sessions are named `2026-10-20 - Session 1`, `- Session 2`, … and numbered across
-the whole day: if the first card has Sessions 1–3, the second card continues with
-Session 4. Coaches rename them in Hudl if needed (Skelly, Red Zone, …).
+After copying, the **touchscreen** shows each session with a preview picture and the
+coach taps its name (Team, Inside Run, Skelly, WR/DB 1v1, OL/DL 1v1, KO/KR, Red Zone –
+list in `GROUP_NAMES`), then confirms with **Upload**. The playlist in Hudl is then called
+`2026-10-20 - Red Zone` (a second "Team" that day becomes `Team 2`). Names with "/" are
+stored in folders with "-" (`WR-DB 1v1`), but Hudl gets the real name.
+If nobody names them within 30 minutes (`NAMING_TIMEOUT_MINUTES`), they are uploaded as
+`2026-10-20 - Session 1`, `- Session 2`, … (numbered across the whole day) and can be
+renamed in Hudl.
 
 | File | What it does |
 |---|---|
 | `kiosk.py` | Detects cards, copies and groups clips, runs the upload queue |
 | `hudl_upload.py` | Uploads one folder to Hudl (also usable by hand) |
 | `status.py` | LEDs and buzzer |
+| `gui.py` | Touchscreen: name the sessions before upload |
 | `kiosk.service` | Starts the kiosk when the Pi boots |
 | `virtual_card.py` | Virtual SD cards for testing on a PC |
 
@@ -51,6 +57,8 @@ Blue LED:
 ## Hardware
 
 - Raspberry Pi 5 (4 GB), official 27 W USB-C power supply, Active Cooler or case with fan
+- Raspberry Pi Touch Display 2 (5" or 7"), connected with the ribbon cable (DSI), set to
+  landscape; the screen is drawn at 800x480 and scaled
 - microSD card 32 GB for the system
 - USB HDD for the clips, e.g. 1 TB 2.5" (powered over USB). One practice is about
   0.4 GB, so it holds years of practices. Clips are kept forever.
@@ -74,7 +82,8 @@ Wiring (BCM numbers, LED long leg → resistor → GPIO, short leg → GND):
 1. Flash **Raspberry Pi OS Lite (64-bit)** with Raspberry Pi Imager. Set user `pi`,
    Wi-Fi and SSH in the Imager settings. (Other user name → change paths in `kiosk.service`.)
 2. Copy this folder to the Pi as `/home/pi/kiosk` (e.g. `git clone` from GitHub).
-3. Archive HDD: format it with the name `KIOSKHDD` (the kiosk never treats a drive with
+3. System packages: `sudo apt install ffmpeg` (preview pictures for the touchscreen).
+   Archive HDD: format it with the name `KIOSKHDD` (the kiosk never treats a drive with
    that name as an SD card) and mount it at `/mnt/archive`:
    ```bash
    lsblk                                       # find the HDD, e.g. /dev/sda
@@ -136,6 +145,11 @@ sudo python3 virtual_card.py remove teamcam
 test clips); without it, short test clips are generated. Drop `--no-upload` to also
 upload to Hudl (this creates real uploads, delete them afterwards).
 
+Test the touchscreen in a window (click with the mouse instead of tapping):
+```bash
+python kiosk.py --card-dir test_clips --archive ~/kiosk_test --no-upload --gui
+```
+
 Quick test without sudo (a folder instead of a card):
 ```bash
 python kiosk.py --card-dir test_clips --archive ~/kiosk_test --no-upload
@@ -144,6 +158,8 @@ python kiosk.py --card-dir test_clips --archive ~/kiosk_test --no-upload
 ## Settings (top of `kiosk.py`)
 
 - `READERS`: which reader is which camera (USB port) and its LED pin
+- `GROUP_NAMES`: the name buttons on the touchscreen
+- `NAMING_TIMEOUT_MINUTES = 30`: how long the touchscreen waits for names before uploading
 - `SESSION_GAP_MINUTES = 5`: a pause longer than this between two clips starts a new session
   (see "Finding the right pause length").
   The time used is when the camera finished writing the clip, so this works for short clips.
@@ -153,6 +169,9 @@ python kiosk.py --card-dir test_clips --archive ~/kiosk_test --no-upload
   (Hudl requires one). Change it when the season's event changes.
 
 ## Known gaps
+
+- The touchscreen runs on the Pi without a desktop (`SDL_VIDEODRIVER=kmsdrm` in
+  `kiosk.service`); this is only tested on a PC so far, not on the Pi yet.
 
 - The Hudl login expires every 14 days; the kiosk then logs in again by itself with
   `hudl_credentials.json`. If that fails (password changed, captcha, security code), uploads

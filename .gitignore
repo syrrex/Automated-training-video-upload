@@ -18,3 +18,4 @@ screenshots/
 __pycache__/
 *.pyc
 .idea/
+test_card/

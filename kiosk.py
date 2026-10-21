@@ -5,20 +5,25 @@ never changed.
 
 Clips are split into sessions wherever the pause between two clips is longer
 than SESSION_GAP_MINUTES. Sessions are numbered per day across all cards
-(first card: Session 1-3, second card: Session 4, ...); coaches rename them
-in Hudl if needed. There is one card reader per camera (see READERS), each
-with its own LED.
+(first card: Session 1-3, second card: Session 4, ...). With --gui, a coach
+can name them on the touchscreen (Team, Redzone, ...); if nobody does within
+NAMING_TIMEOUT_MINUTES, they are uploaded as Session N. There is one card
+reader per camera (see READERS), each with its own LED.
 
 Archive layout:
     <archive>/2026-10-21_Team cam/2026-10-21 - Session 1/C0001.MP4 ...
     <archive>/2026-10-21_Team cam/2026-10-21 - Session 1/.uploaded   <- written after upload
     <archive>/2026-10-21_Inside Run cam/2026-10-21 - Session 4/...
     <archive>/2026-10-21_Team cam/2026-10-21 - Session 1/.rejected  <- Hudl refused the files (see log)
+    <archive>/2026-10-21_Team cam/2026-10-21 - Session 1/.preview.jpg  <- picture for the touchscreen
+    <archive>/2026-10-21_Team cam/.naming      <- waiting for names on the touchscreen (not uploaded yet)
+    <archive>/2026-10-21_Team cam/2026-10-21 - WR-DB 1v1/.hudl_name  <- "2026-10-21 - WR/DB 1v1"
+                                               (the Hudl name, when it can't be a folder name)
     <archive>/seen.txt                                               <- clips already copied
 Clips are kept on the archive HDD; set KEEP_DAYS_AFTER_UPLOAD to delete them after upload.
 
 On the Pi (root is needed to mount cards):
-    sudo python3 kiosk.py
+    sudo python3 kiosk.py --gui --fullscreen
     sudo python3 kiosk.py --show-readers     # find the ports for READERS
 Find the right SESSION_GAP_MINUTES (pauses between the clips of a practice):
     python kiosk.py --show-gaps real_practice
@@ -26,6 +31,8 @@ Test without a card reader:
     python kiosk.py --card-dir test_clips --archive ~/kiosk_test --no-upload
 Test with virtual SD cards (see virtual_card.py):
     sudo -E env PATH="$PATH" python3 kiosk.py --archive ~/kiosk_test --allow-loop --no-upload
+Test the touchscreen in a window (click with the mouse):
+    python kiosk.py --card-dir test_clips --archive ~/kiosk_test --no-upload --gui
 """
 import argparse
 import hashlib
@@ -65,6 +72,10 @@ RETRY_AFTER_FAILURE_MINUTES = 5
 RETRY_AFTER_LOGIN_FAILURE_MINUTES = 60  # not more often, so Hudl doesn't lock the account
 KEEP_DAYS_AFTER_UPLOAD = None  # None = keep clips forever; a number = delete that many days after upload
 ALLOW_LOOP_DEVICES = False  # --allow-loop: treat virtual SD cards (loop devices) as cards
+# Touchscreen (--gui): names a coach can give each session, in button order
+GROUP_NAMES = ["Team", "Inside Run", "Skelly", "WR/DB 1v1", "OL/DL 1v1", "KO/KR", "Red Zone"]
+NAMING_TIMEOUT_MINUTES = 30  # upload as "Session N" if nobody names the sessions within this time
+NAMING_ENABLED = False  # set by --gui
 
 archive_lock = threading.Lock()  # two cards can be copied at the same time
 
@@ -128,6 +139,25 @@ def session_number(session_dir: Path) -> int:
         return 0
 
 
+def session_clips(session_dir: Path) -> list[Path]:
+    return hudl_upload.find_clips(session_dir)
+
+
+def first_clip_time(session_dir: Path) -> float:
+    clips = session_clips(session_dir)
+    return clips[0].stat().st_mtime if clips else 0
+
+
+def make_preview(clip: Path, target: Path) -> None:
+    """Save one frame of the clip as a small JPEG for the touchscreen (needs ffmpeg)."""
+    try:
+        subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-ss", "2", "-i", str(clip),
+                        "-frames:v", "1", "-vf", "scale=480:-2", str(target)],
+                       check=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        log(f"no preview picture for {clip.name} (is ffmpeg installed?)")
+
+
 def clip_key(clip: Path) -> str:
     """Identifies a clip; includes the start of the file, since both cameras use the same file names."""
     st = clip.stat()
@@ -175,7 +205,12 @@ def ingest(card_root: Path, archive: Path, reader: dict) -> int:
             if target.exists():  # same file name in two card folders
                 target = session_dir / f"{clip.parent.name}_{clip.name}"
             shutil.copy2(clip, target)  # copy2 keeps the recording time
+        if NAMING_ENABLED:
+            first = session_clips(session_dir)[0]
+            make_preview(first, session_dir / ".preview.jpg")
 
+    if NAMING_ENABLED:
+        (partial_dir / ".naming").touch()  # the uploader waits for names (or the timeout)
     partial_dir.rename(final_dir)
     with archive_lock, open(archive / "seen.txt", "a") as f:
         f.writelines(clip_key(c) + "\n" for c in new_clips)
@@ -268,24 +303,94 @@ def show_readers() -> None:
         print(f"{card['name']}: port '{port_of(card['name'])}' -> {reader_for(card['name'])['label']}")
 
 
+# ---------- naming on the touchscreen ----------
+
+def cards_waiting_for_names(archive: Path) -> list[Path]:
+    """Card folders whose sessions haven't been named yet, oldest first."""
+    markers = sorted(archive.glob("*/.naming"), key=lambda m: m.stat().st_mtime)
+    return [m.parent for m in markers]
+
+
+def sessions_of(card_dir: Path) -> list[Path]:
+    """Session folders of one card, in recording order."""
+    return sorted((d for d in card_dir.iterdir() if d.is_dir()), key=first_clip_time)
+
+
+def naming_deadline(card_dir: Path) -> float | None:
+    """Time when the card's sessions get uploaded unnamed; None if no longer waiting."""
+    try:
+        return (card_dir / ".naming").stat().st_mtime + NAMING_TIMEOUT_MINUTES * 60
+    except FileNotFoundError:
+        return None
+
+
+def folder_name(name: str) -> str:
+    """A name usable as a folder name ("/" separates folders)."""
+    return name.replace("/", "-")
+
+
+def apply_names(card_dir: Path, names: list[str | None]) -> bool:
+    """Rename the card's sessions (None = keep 'Session N') and release them for upload.
+    Returns False if it's too late because the timeout already released them."""
+    with archive_lock:
+        marker = card_dir / ".naming"
+        if not marker.exists():
+            return False
+        date = card_dir.name[:10]
+        taken = {d.name for d in card_dir.parent.glob(f"{date}_*/*") if d.is_dir()}
+        for session, name in zip(sessions_of(card_dir), names):
+            if not name:
+                continue
+            new_name = f"{date} - {name}"
+            n = 2
+            while folder_name(new_name) in taken:  # second "Team" of the day -> "Team 2"
+                new_name = f"{date} - {name} {n}"
+                n += 1
+            taken.discard(session.name)
+            taken.add(folder_name(new_name))
+            renamed = session.rename(session.with_name(folder_name(new_name)))
+            if renamed.name != new_name:  # e.g. "WR/DB 1v1": keep the real name for Hudl
+                (renamed / ".hudl_name").write_text(new_name)
+            log(f"named {session.name} -> {new_name}")
+        marker.unlink()
+    return True
+
+
+def hudl_name(session_dir: Path) -> str:
+    """Playlist name in Hudl: the folder name, or the name saved in .hudl_name."""
+    saved = session_dir / ".hudl_name"
+    return saved.read_text().strip() if saved.exists() else session_dir.name
+
+
+def release_expired_naming(archive: Path) -> None:
+    with archive_lock:
+        for marker in archive.glob("*/.naming"):
+            if time.time() - marker.stat().st_mtime > NAMING_TIMEOUT_MINUTES * 60:
+                marker.unlink()
+                log(f"nobody named {marker.parent.name} within {NAMING_TIMEOUT_MINUTES} min "
+                    "- uploading as Session N")
+
+
 # ---------- uploads ----------
 
 def pending_sessions(archive: Path) -> list[Path]:
-    """Sessions not uploaded yet, oldest day first, then by session number."""
+    """Sessions not uploaded yet (and not waiting for names), oldest first."""
     sessions = [
         session
         for practice in archive.iterdir()
         if practice.is_dir() and not practice.name.endswith(".partial")
+        and not (practice / ".naming").exists()
         for session in practice.iterdir()
         if session.is_dir()
         and not (session / ".uploaded").exists() and not (session / ".rejected").exists()
     ]
-    return sorted(sessions, key=lambda s: (s.name[:10], session_number(s)))
+    return sorted(sessions, key=lambda s: (s.name[:10], first_clip_time(s)))
 
 
 def upload_loop(archive: Path, status: Status) -> None:
     while True:
         delete_old_uploads(archive)
+        release_expired_naming(archive)
         pending = pending_sessions(archive)
         if not pending:
             status.uploads_done()
@@ -293,10 +398,10 @@ def upload_loop(archive: Path, status: Status) -> None:
             continue
 
         session = pending[0]
-        status.uploading()
+        status.uploading(f"{hudl_name(session)} ({len(pending)} waiting)")
         log(f"uploading {session} ({len(pending)} sessions waiting)")
         try:
-            ok = hudl_upload.upload(session, session.name, VIDEO_TYPE, HUDL_EVENT,
+            ok = hudl_upload.upload(session, hudl_name(session), VIDEO_TYPE, HUDL_EVENT,
                                     headless=True, pause=False)
         except hudl_upload.LoginFailed as e:
             log(f"{e} - next try in {RETRY_AFTER_LOGIN_FAILURE_MINUTES} min")
@@ -345,7 +450,7 @@ def cleanup_partial(archive: Path) -> None:
 
 
 def main() -> None:
-    global ALLOW_LOOP_DEVICES, SESSION_GAP_MINUTES
+    global ALLOW_LOOP_DEVICES, SESSION_GAP_MINUTES, NAMING_ENABLED
     parser = argparse.ArgumentParser(description="SD card -> Hudl upload kiosk")
     parser.add_argument("--archive", type=Path, default=DEFAULT_ARCHIVE,
                         help=f"where clips are stored (default: {DEFAULT_ARCHIVE})")
@@ -362,10 +467,14 @@ def main() -> None:
                         help="accept virtual SD cards from virtual_card.py")
     parser.add_argument("--show-readers", action="store_true",
                         help="print the port of each inserted card and exit")
+    parser.add_argument("--gui", action="store_true",
+                        help="show the touchscreen; coaches name the sessions before upload")
+    parser.add_argument("--fullscreen", action="store_true", help="with --gui: fill the screen")
     args = parser.parse_args()
 
     ALLOW_LOOP_DEVICES = args.allow_loop
     SESSION_GAP_MINUTES = args.gap
+    NAMING_ENABLED = args.gui
 
     if args.show_gaps:
         show_gaps(args.show_gaps)
@@ -387,9 +496,13 @@ def main() -> None:
         log("waiting for SD cards")
 
     if not args.no_upload:
-        upload_loop(args.archive, status)
-    elif not args.card_dir:
-        threading.Event().wait()  # keep watching for cards
+        threading.Thread(target=upload_loop, args=(args.archive, status), daemon=True).start()
+
+    if args.gui:
+        import gui
+        gui.run(args.archive, status, args.fullscreen)  # until the window is closed
+    elif not (args.card_dir and args.no_upload):
+        threading.Event().wait()  # keep watching for cards / uploading
 
 
 if __name__ == "__main__":
