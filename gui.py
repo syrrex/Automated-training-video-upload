@@ -23,6 +23,7 @@ warnings.filterwarnings("ignore", message="no fast renderer")
 import pygame  # noqa: E402  (after the settings above)
 
 import kiosk
+import status as st
 
 WIDTH, HEIGHT = 800, 480
 FPS = 15
@@ -33,6 +34,10 @@ DIM = (140, 155, 170)
 BUTTON = (48, 66, 84)
 SELECTED = (40, 140, 90)
 ACCENT = (230, 120, 40)
+STATE_COLORS = {  # card / upload status bars (replace the LEDs)
+    st.COPYING: (210, 110, 30), st.DONE: (40, 140, 90), st.ERROR: (190, 50, 50),
+    st.UPLOADING: (40, 100, 180), st.UPLOAD_ERROR: (190, 50, 50), st.UPLOADED: PANEL,
+}
 MESSAGE_SECONDS = 4
 
 
@@ -147,19 +152,41 @@ class Screen:
             self.draw_session()
         else:
             self.draw_summary()
+        if self.card is not None:
+            self.draw_card_alert()
         pygame.display.flip()
 
     def draw_idle(self) -> None:
-        self.text("Hudl Upload Kiosk", (WIDTH // 2, 70), self.font_big, center=True)
+        self.text("Hudl Upload Kiosk", (20, 18), self.font_small, DIM)
+        self.text(datetime.now().strftime("%H:%M"), (WIDTH - 80, 18), self.font_small, DIM)
         if time.monotonic() < self.message_until:
-            self.text(self.message, (WIDTH // 2, 160), self.font, ACCENT, center=True)
+            self.text(self.message, (WIDTH // 2, 90), self.font_big, ACCENT, center=True)
         else:
-            self.text("Insert the SD card", (WIDTH // 2, 160), self.font, center=True)
-        y = 250
-        for line in list(self.status.lines.values()):
-            self.text(line, (40, y), self.font_small, DIM)
-            y += 34
-        self.text(datetime.now().strftime("%H:%M"), (WIDTH - 90, HEIGHT - 40), self.font_small, DIM)
+            self.text("Insert the SD card", (WIDTH // 2, 90), self.font_big, center=True)
+        # one coloured bar per card reader, then the upload status
+        lines = list(self.status.lines.items())
+        cards = [(state, text) for key, (state, text) in lines if key != "upload"]
+        upload = [(state, text) for key, (state, text) in lines if key == "upload"]
+        y = 150
+        for state, text in cards:
+            bar = pygame.Rect(20, y, WIDTH - 40, 70)
+            pygame.draw.rect(self.surface, STATE_COLORS[state], bar, border_radius=10)
+            self.text(text, bar.center, self.font, center=True)
+            y += 82
+        for state, text in upload:
+            bar = pygame.Rect(20, HEIGHT - 70, WIDTH - 40, 50)
+            pygame.draw.rect(self.surface, STATE_COLORS[state], bar, border_radius=10)
+            self.text(text, bar.center, self.font_small, center=True)
+
+    def draw_card_alert(self) -> None:
+        """While naming: show cards that are still copying or failed, so nobody pulls them."""
+        alerts = [(state, text) for key, (state, text) in list(self.status.lines.items())
+                  if key != "upload" and state in (st.COPYING, st.ERROR)]
+        if alerts:
+            state, text = alerts[0]
+            bar = pygame.Rect(0, 0, WIDTH, 40)
+            pygame.draw.rect(self.surface, STATE_COLORS[state], bar)
+            self.text(text, bar.center, self.font_small, center=True)
 
     def draw_session(self) -> None:
         session = self.sessions[self.index]

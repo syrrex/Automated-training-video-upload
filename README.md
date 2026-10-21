@@ -3,7 +3,8 @@
 Put the cameras' SD cards into the kiosk after practice. The kiosk copies the clips,
 splits them into sessions by the pauses between clips, lets a coach name each session on
 a touchscreen (Team, Skelly, Red Zone, …) and uploads every session to Hudl as its own
-playlist, e.g. `2026-10-20 - Red Zone`. Cards are only read, never changed.
+playlist, e.g. `2026-10-20 - Red Zone`. The clips are kept on the kiosk's archive drive
+and deleted from the SD card, so the card is empty for the next practice.
 
 It runs on a Raspberry Pi 4 with two card readers (one per camera) and a touchscreen, but
 everything can be tried on a normal PC first.
@@ -13,7 +14,7 @@ everything can be tried on a normal PC first.
 | `kiosk.py` | Detects cards, copies and groups clips, runs the upload queue. **Settings at the top** |
 | `hudl_upload.py` | Uploads one folder to Hudl by remote-controlling a browser (Hudl has no upload API) |
 | `gui.py` | Touchscreen: name the sessions before upload |
-| `status.py` | LEDs and buzzer on the Pi |
+| `status.py` | Card and upload status for the screen, optional buzzer |
 | `kiosk.service` | Starts the kiosk when the Pi boots |
 | `make_test_card.py` | Builds a test "SD card" folder from clips, for trying it without a camera |
 | `virtual_card.py` | Virtual SD cards that Linux treats like a real card in a reader |
@@ -66,8 +67,12 @@ To also test the **card reader detection** (virtual SD cards, needs sudo), see
 
 ## How it works
 
-1. **Card inserted:** the kiosk notices it, mounts it read-only and copies all new clips
+1. **Card inserted:** the kiosk notices it and copies all new clips to the archive drive
    (clips it has seen before are skipped, so inserting a card twice uploads nothing twice).
+   Every copy is compared with the original (checksum); then the clips are **deleted from
+   the card**. Only video files are deleted, nothing else on the card is touched. If a copy
+   differs, nothing is deleted and the card shows an error. The coach is told to remove
+   the card only after the kiosk has finished writing to it.
 2. **Sessions:** clips are split wherever the pause between two clips is longer than
    `SESSION_GAP_MINUTES`.
 3. **Naming:** the touchscreen shows each session with a preview picture; the coach taps
@@ -93,9 +98,13 @@ can't be a folder name).
 - `SESSION_GAP_MINUTES = 5`: a pause longer than this between two clips starts a new session
   (see "Finding the right pause length")
 - `NAMING_TIMEOUT_MINUTES = 30`: how long the touchscreen waits for names before uploading
-- `READERS`: which card reader is which camera (USB port) and its LED pin
+- `READERS`: which card reader is which camera (USB port)
 - `VIDEO_TYPE = "Practice"`
-- `KEEP_DAYS_AFTER_UPLOAD = None`: clips are kept forever; set a number of days to delete them after upload
+- `DELETE_FROM_CARD = True`: delete the clips from the SD card once they are copied and
+  verified (`False` = cards are only read, never changed). Folders given with `--card-dir`
+  are never deleted from.
+- `KEEP_DAYS_AFTER_UPLOAD = None`: clips on the archive drive are kept forever; set a
+  number of days to delete them there after upload
 
 ### Finding the right pause length
 
@@ -129,7 +138,9 @@ sudo python3 virtual_card.py remove teamcam                # card comes out
 sudo python3 virtual_card.py list
 sudo python3 virtual_card.py delete teamcam
 ```
-Add `--no-upload` to the kiosk command to test without Hudl. Without `--copy-card`,
+The kiosk empties the virtual card like a real one, so `delete` and `create` it again
+before the next test. Add `--no-upload` to the kiosk command to test without Hudl.
+Without `--copy-card`,
 `create` generates short test clips – fine for testing detection, but Hudl rejects them.
 
 ### Two cameras at once without sudo
@@ -167,38 +178,24 @@ python hudl_upload.py upload some_folder --dry-run      # only list the clips
   together – two card readers plus a bus-powered 2.5" HDD can be too much.
 - 2 USB card readers for the cameras' cards. The drive goes in a blue USB 3 port, so one
   reader uses a black USB 2 port (fast enough).
-- Optional: 1 active 3.3 V buzzer ("remove the card" beep) and 3 LEDs with 220 Ω
-  resistors. The touchscreen already shows the same status, so the LEDs can be left out.
+- Optional: 1 active 3.3 V buzzer that beeps when a card can be removed (+ to GPIO 24 /
+  pin 18, − to GND / pin 20)
 - Network: Wi-Fi works (a normal password, no login page in the browser); an Ethernet
   cable is more reliable if there is a socket
 
-Wiring of the optional LEDs/buzzer (BCM numbers, LED long leg → resistor → GPIO, short
-leg → GND). Pins 4 and 6 are taken by the touchscreen's power:
+### What the screen shows
 
-| Part | GPIO | Pin |
-|---|---|---|
-| LED reader 1 (Inside Run) | 17 | 11 |
-| LED reader 2 (Team) | 27 | 13 |
-| Blue LED (upload) | 23 | 16 |
-| Buzzer + | 24 | 18 |
-| GND | - | 9, 14, 20… |
+With no card waiting for names, the screen shows one coloured bar per card reader:
 
-### Status lights (optional)
-
-The touchscreen shows the status; the LEDs only repeat it. One green LED next to each reader:
-
-| Light | Meaning |
+| Bar | Meaning |
 |---|---|
-| Blinking | Copying, **do not remove the card** |
-| On | Done, remove the card (1 beep = new clips, 2 beeps = nothing new on it) |
-| Fast blinking + long beep | Card could not be read |
+| Orange | Copying, **don't remove the card** |
+| Green | Done, remove the card (buzzer: 1 beep = new clips, 2 beeps = nothing new) |
+| Red | Card could not be read (long beep) – see the log |
 
-Blue LED:
-
-| Light | Meaning |
-|---|---|
-| Blinking | Uploading to Hudl |
-| Fast blinking | Upload failed, retries every 5 minutes |
+and at the bottom the upload status (blue = uploading, red = failed, retries every 5
+minutes). While a coach is naming sessions, a card that is still copying is shown as an
+orange bar at the top.
 
 ### Setup
 
@@ -244,11 +241,17 @@ Blue LED:
 
 ## Known gaps
 
+- Clips are deleted from the card on a computer, not in the camera. Some cameras keep their
+  own clip list and may ask to "repair"/"recover" the card afterwards; then format the card
+  in the camera once. The kiosk's copy on the archive drive is the backup until the clips
+  are in Hudl – keep the drive.
+- A card with its write-protect switch on is copied and uploaded normally, but not emptied.
+
 - **Not tested on a Raspberry Pi yet:** the touchscreen without a desktop
-  (`SDL_VIDEODRIVER=kmsdrm` in `kiosk.service`), LEDs, real USB card readers and real
+  (`SDL_VIDEODRIVER=kmsdrm` in `kiosk.service`), the buzzer, real USB card readers and real
   camera cards. Everything else is tested on a PC (WSL), including uploads to Hudl.
 - If the automatic Hudl login fails (password changed, captcha, security code), uploads
-  stop (blue fast blinking), the kiosk retries once an hour and the log says
+  stop (red upload bar on the screen), the kiosk retries once an hour and the log says
   "automatic Hudl login failed". Fix: run `set-login` again.
 - If Hudl refuses a session's files as "invalid or corrupt", the session gets a `.rejected`
   marker and is skipped (see the log); upload those clips by hand.

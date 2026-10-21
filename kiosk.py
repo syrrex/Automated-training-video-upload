@@ -1,14 +1,15 @@
 """
-Upload kiosk: insert SD cards, the clips are copied to the Pi, split into
-sessions and uploaded to Hudl, one upload per session. Cards are only read,
-never changed.
+Upload kiosk: insert SD cards, the clips are copied to the archive drive, split
+into sessions and uploaded to Hudl, one upload per session. After every clip is
+copied and verified, it is deleted from the card (DELETE_FROM_CARD), so the card
+is empty for the next practice.
 
 Clips are split into sessions wherever the pause between two clips is longer
 than SESSION_GAP_MINUTES. Sessions are numbered per day across all cards
 (first card: Session 1-3, second card: Session 4, ...). With --gui, a coach
 can name them on the touchscreen (Team, Redzone, ...); if nobody does within
 NAMING_TIMEOUT_MINUTES, they are uploaded as Session N. There is one card
-reader per camera (see READERS), each with its own LED.
+reader per camera (see READERS).
 
 Archive layout:
     <archive>/2026-10-21_Team cam/2026-10-21 - Session 1/C0001.MP4 ...
@@ -54,12 +55,11 @@ from status import Status
 #   ports:    how the reader is recognised. A card counts as being in this reader if one
 #             of these texts is part of its port (run --show-readers with a card inserted
 #             to see the port). /dev/loop10 and /dev/loop11 are the virtual readers.
-#   led_pin:  GPIO (BCM) pin of this reader's LED
 READERS = [
-    {"label": "Inside Run cam", "ports": ["/dev/loop10"], "led_pin": 17},
-    {"label": "Team cam", "ports": ["/dev/loop11"], "led_pin": 27},
+    {"label": "Inside Run cam", "ports": ["/dev/loop10"]},
+    {"label": "Team cam", "ports": ["/dev/loop11"]},
 ]
-UNKNOWN_READER = {"label": "Unknown reader", "ports": [], "led_pin": None}
+UNKNOWN_READER = {"label": "Unknown reader", "ports": []}
 
 DEFAULT_ARCHIVE = Path("/mnt/archive")  # USB HDD
 ARCHIVE_LABEL = "KIOSKHDD"  # drive name of the archive HDD - never treated as an SD card
@@ -73,6 +73,7 @@ UPLOAD_POLL_SECONDS = 30
 RETRY_AFTER_FAILURE_MINUTES = 5
 RETRY_AFTER_LOGIN_FAILURE_MINUTES = 60  # not more often, so Hudl doesn't lock the account
 KEEP_DAYS_AFTER_UPLOAD = None  # None = keep clips forever; a number = delete that many days after upload
+DELETE_FROM_CARD = True  # delete clips from the SD card once they are copied and verified
 ALLOW_LOOP_DEVICES = False  # --allow-loop: treat virtual SD cards (loop devices) as cards
 # Touchscreen (--gui): names a coach can give each session, in button order
 GROUP_NAMES = ["Team", "Inside Run", "Skelly", "WR/DB 1v1", "OL/DL 1v1", "KO/KR", "Red Zone"]
@@ -168,6 +169,14 @@ def clip_key(clip: Path) -> str:
     return f"{clip.name}|{st.st_size}|{int(st.st_mtime)}|{head}"
 
 
+def file_hash(path: Path) -> str:
+    h = hashlib.md5()
+    with open(path, "rb") as f:
+        while chunk := f.read(1024 * 1024):
+            h.update(chunk)
+    return h.hexdigest()
+
+
 def load_seen(archive: Path) -> set[str]:
     seen_file = archive / "seen.txt"
     return set(seen_file.read_text().splitlines()) if seen_file.exists() else set()
@@ -207,6 +216,9 @@ def ingest(card_root: Path, archive: Path, reader: dict) -> int:
             if target.exists():  # same file name in two card folders
                 target = session_dir / f"{clip.parent.name}_{clip.name}"
             shutil.copy2(clip, target)  # copy2 keeps the recording time
+            if DELETE_FROM_CARD and file_hash(clip) != file_hash(target):
+                # never delete a clip from the card unless the copy is identical
+                raise OSError(f"copy of {clip.name} differs from the card - nothing deleted")
         if NAMING_ENABLED:
             first = session_clips(session_dir)[0]
             make_preview(first, session_dir / ".preview.jpg")
@@ -259,6 +271,22 @@ def reader_for(device: str) -> dict:
     return UNKNOWN_READER
 
 
+def delete_copied_clips(card_root: Path, archive: Path, reader: dict) -> int:
+    """Delete the clips on the card that are safely in the archive (listed in seen.txt)."""
+    seen = load_seen(archive)
+    deleted = 0
+    for clip in find_card_clips(card_root):
+        if clip_key(clip) in seen:
+            try:
+                clip.unlink()
+                deleted += 1
+            except OSError as e:  # e.g. write-protect switch on the card
+                log(f"{reader['label']}: could not delete {clip.name} from the card ({e})")
+                break
+    log(f"{reader['label']}: deleted {deleted} copied clips from the card")
+    return deleted
+
+
 def handle_card(card: dict, archive: Path, status: Status) -> None:
     reader = reader_for(card["name"])
     status.card_copying(reader)
@@ -268,11 +296,20 @@ def handle_card(card: dict, archive: Path, status: Status) -> None:
         mountpoint = card.get("mountpoint")
         if not mountpoint:
             mount_point.mkdir(parents=True, exist_ok=True)
-            subprocess.run(["mount", "-o", "ro", card["name"], str(mount_point)], check=True)
+            options = "rw" if DELETE_FROM_CARD else "ro"
+            subprocess.run(["mount", "-o", options, card["name"], str(mount_point)], check=True)
             mounted_by_us = True
             mountpoint = str(mount_point)
         log(f"{reader['label']}: card {card['name']} mounted at {mountpoint}")
         new_clips = ingest(Path(mountpoint), archive, reader)
+        if DELETE_FROM_CARD:
+            delete_copied_clips(Path(mountpoint), archive, reader)
+        # finish writing to the card before telling the coach to remove it
+        if mounted_by_us:
+            subprocess.run(["umount", str(mount_point)], check=True)
+            mounted_by_us = False
+        else:
+            subprocess.run(["sync"])
         status.card_done(reader, new_clips)
     except Exception:
         log(f"{reader['label']}: card failed:\n" + traceback.format_exc())
