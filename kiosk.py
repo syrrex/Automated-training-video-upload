@@ -33,6 +33,8 @@ Test with virtual SD cards (see virtual_card.py):
     sudo -E env PATH="$PATH" python3 kiosk.py --archive ~/kiosk_test --allow-loop --no-upload
 Test the touchscreen in a window (click with the mouse):
     python kiosk.py --card-dir test_clips --archive ~/kiosk_test --no-upload --gui
+Two cards at once (reader 1 and 2):
+    python kiosk.py --card-dir test_cards/insiderun test_cards/teamcam --reader 1 2 --gap 3 --gui
 """
 import argparse
 import hashlib
@@ -454,10 +456,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="SD card -> Hudl upload kiosk")
     parser.add_argument("--archive", type=Path, default=DEFAULT_ARCHIVE,
                         help=f"where clips are stored (default: {DEFAULT_ARCHIVE})")
-    parser.add_argument("--card-dir", type=Path,
-                        help="treat this folder as an inserted card (testing without a reader)")
-    parser.add_argument("--reader", type=int, default=1,
-                        help="with --card-dir: which reader the folder is 'in' (1, 2, ...)")
+    parser.add_argument("--card-dir", type=Path, nargs="+",
+                        help="treat these folders as inserted cards (testing without a reader)")
+    parser.add_argument("--reader", type=int, nargs="+", default=[1],
+                        help="with --card-dir: which reader each folder is 'in' (1, 2, ...)")
     parser.add_argument("--show-gaps", type=Path, metavar="FOLDER",
                         help="list the clips in FOLDER with the pauses between them and exit")
     parser.add_argument("--gap", type=float, default=SESSION_GAP_MINUTES,
@@ -488,9 +490,10 @@ def main() -> None:
     status = Status(READERS)
 
     if args.card_dir:
-        reader = READERS[args.reader - 1]
-        status.card_copying(reader)
-        status.card_done(reader, ingest(args.card_dir, args.archive, reader))
+        for i, card_dir in enumerate(args.card_dir):
+            reader = READERS[args.reader[min(i, len(args.reader) - 1)] - 1]
+            status.card_copying(reader)
+            status.card_done(reader, ingest(card_dir, args.archive, reader))
     else:
         threading.Thread(target=card_loop, args=(args.archive, status), daemon=True).start()
         log("waiting for SD cards")

@@ -108,12 +108,16 @@ class LoginFailed(Exception):
 
 
 def is_logged_in(page) -> bool:
+    """True if Hudl shows the Upload button, False if it shows the login form.
+    Raises StepFailed if it shows neither (page didn't load) - that is not a login problem."""
     from playwright.sync_api import TimeoutError as PlaywrightTimeout
+    upload_button = page.get_by_role("link", name="Upload Upload")
+    login_form = page.get_by_role("textbox", name="Email*")
     try:
-        page.get_by_role("link", name="Upload Upload").wait_for(timeout=15000)
-        return True
-    except PlaywrightTimeout:
-        return False
+        upload_button.or_(login_form).first.wait_for(timeout=STEP_TIMEOUT_SECONDS * 1000)
+    except PlaywrightTimeout as e:
+        raise StepFailed("load Hudl home page") from e
+    return not login_form.is_visible()
 
 
 def auto_login(page) -> None:
@@ -127,6 +131,9 @@ def auto_login(page) -> None:
     print("  -> logging in to Hudl")
     try:
         page.goto(HUDL_LOGIN_URL)
+        if "identity.hudl.com" not in page.url and "login" not in page.url:
+            print("  -> already logged in")
+            return
         page.get_by_role("textbox", name="Email*").fill(credentials["email"])
         page.get_by_role("button", name="Continue", exact=True).click()
         page.get_by_role("textbox", name="Password*").fill(credentials["password"])
@@ -269,16 +276,20 @@ def upload(folder: Path, name: str, video_type: str, event: str | None,
         page = context.new_page()
         page.goto(HUDL_HOME)
 
-        if not is_logged_in(page):
-            try:
+        try:
+            if not is_logged_in(page):
                 auto_login(page)
                 page.goto(HUDL_HOME)
                 if not is_logged_in(page):
-                    raise LoginFailed("logged in, but the Hudl home page shows no Upload button")
-            except LoginFailed:
-                browser.close()
-                raise
-            context.storage_state(path=str(AUTH_FILE))
+                    raise LoginFailed("logged in, but Hudl still shows the login form")
+                context.storage_state(path=str(AUTH_FILE))
+        except StepFailed as e:  # Hudl didn't load: a normal hiccup, retried later
+            print(f"FAILED at step '{e}'. Screenshot: {save_screenshot(page, 'failed')}")
+            browser.close()
+            return False
+        except LoginFailed:
+            browser.close()
+            raise
 
         if pause:
             # Opens the Playwright Inspector: press "Resume" to continue the upload.

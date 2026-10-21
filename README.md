@@ -145,6 +145,15 @@ sudo python3 virtual_card.py remove teamcam
 test clips); without it, short test clips are generated. Drop `--no-upload` to also
 upload to Hudl (this creates real uploads, delete them afterwards).
 
+Full simulation (card detection + touchscreen + Hudl upload), with test cards whose
+clips are 1 min apart and sessions 5 min apart (`test_cards/`, not in git):
+```bash
+sudo python3 virtual_card.py create teamcam_real --copy-card test_cards/teamcam
+sudo -E env PATH="$PATH" PLAYWRIGHT_BROWSERS_PATH=$HOME/.cache/ms-playwright \
+  python3 kiosk.py --archive ~/kiosk_full --allow-loop --gap 3 --gui
+sudo python3 virtual_card.py insert teamcam_real --reader 2     # in a second terminal
+```
+
 Test the touchscreen in a window (click with the mouse instead of tapping):
 ```bash
 python kiosk.py --card-dir test_clips --archive ~/kiosk_test --no-upload --gui
