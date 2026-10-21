@@ -1,0 +1,16 @@
+# Hudl login session - works like a password, never commit it
+hudl_auth.json
+
+# team footage and test output
+test_clips/
+screenshots/
+*.mp4
+*.MP4
+*.mov
+*.MOV
+*.img
+
+# Python / IDE
+__pycache__/
+*.pyc
+.idea/

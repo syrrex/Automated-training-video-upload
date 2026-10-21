@@ -1,0 +1,17 @@
+[Unit]
+Description=SD card -> Hudl upload kiosk
+After=network-online.target
+Wants=network-online.target
+# don't start without the HDD, or clips would land on the Pi's microSD card
+RequiresMountsFor=/mnt/archive
+
+[Service]
+# Runs as root because mounting SD cards needs it.
+WorkingDirectory=/home/pi/kiosk
+Environment=PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
+ExecStart=/home/pi/kiosk-venv/bin/python -u kiosk.py --archive /mnt/archive
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
