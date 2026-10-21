@@ -1,6 +1,6 @@
 # Hudl Upload Kiosk
 
-Two card readers, one per camera. Insert the SD cards → clips are copied to the Pi
+Two card readers,  one per camera. Insert the SD cards → clips are copied to the Pi
 → split into sessions wherever the pause between two clips is longer than 5 minutes
 → each session is uploaded to Hudl as its own upload (video type Practice, linked to
 the Preseason event). Cards are only read, never changed.
