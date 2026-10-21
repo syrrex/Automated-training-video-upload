@@ -1,5 +1,9 @@
 # Hudl login session - works like a password, never commit it
 hudl_auth.json
+hudl_credentials.json
+
+# codegen recordings can contain typed passwords
+recorded_*.py
 
 # team footage and test output
 test_clips/

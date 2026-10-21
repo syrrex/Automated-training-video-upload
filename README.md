@@ -73,8 +73,7 @@ Wiring (BCM numbers, LED long leg → resistor → GPIO, short leg → GND):
 
 1. Flash **Raspberry Pi OS Lite (64-bit)** with Raspberry Pi Imager. Set user `pi`,
    Wi-Fi and SSH in the Imager settings. (Other user name → change paths in `kiosk.service`.)
-2. Copy this folder to the Pi as `/home/pi/kiosk`, **including `hudl_auth.json`**
-   (log in on your PC with `python hudl_upload.py login`, then copy the file over).
+2. Copy this folder to the Pi as `/home/pi/kiosk` (e.g. `git clone` from GitHub).
 3. Archive HDD: format it with the name `KIOSKHDD` (the kiosk never treats a drive with
    that name as an SD card) and mount it at `/mnt/archive`:
    ```bash
@@ -99,7 +98,15 @@ Wiring (BCM numbers, LED long leg → resistor → GPIO, short leg → GND):
    ```
    and copy each reader's port (or a unique part of it, e.g. `usb-0:1.1`) into
    `ports` in `READERS` in `kiosk.py`. Keep each reader in the same USB socket from then on.
-6. Start it and enable it at boot:
+6. Store the Hudl login of the **kiosk account** (a dedicated Hudl account with coach
+   rights, from your team admin). The password is typed hidden and the test login runs
+   right away:
+   ```bash
+   cd ~/kiosk && sudo PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright ~/kiosk-venv/bin/python hudl_upload.py set-login
+   ```
+   It is stored in `hudl_credentials.json` (readable only by root). Whenever the Hudl
+   login expires (every 14 days), the kiosk logs in again by itself.
+7. Start it and enable it at boot:
    ```bash
    sudo cp ~/kiosk/kiosk.service /etc/systemd/system/
    sudo systemctl enable --now kiosk
@@ -147,8 +154,14 @@ python kiosk.py --card-dir test_clips --archive ~/kiosk_test --no-upload
 
 ## Known gaps
 
-- When the Hudl login expires, uploads fail (blue fast blinking). Fix: log in again on
-  a PC and copy the new `hudl_auth.json` to the Pi.
+- The Hudl login expires every 14 days; the kiosk then logs in again by itself with
+  `hudl_credentials.json`. If that fails (password changed, captcha, security code), uploads
+  stop (blue fast blinking), the kiosk retries once an hour, and the log says
+  "automatic Hudl login failed". Fix: run `set-login` again, or log in by hand with `login`.
+- If Hudl refuses a session's files as "invalid or corrupt", the session gets a `.rejected`
+  marker and is skipped (see the log); upload those clips by hand.
+- Tested: Wi-Fi outage before and during an upload (detected, retried), kiosk killed in the
+  middle of an upload (restarts and uploads again).
 - Uploads are counted as finished when the page has had no upload traffic for 30 s.
   Check in Hudl after the first real practice that all clips arrived.
 - The kiosk doesn't start without the HDD (`RequiresMountsFor` in `kiosk.service`), so

@@ -13,6 +13,7 @@ Archive layout:
     <archive>/2026-10-21_Team cam/2026-10-21 - Session 1/C0001.MP4 ...
     <archive>/2026-10-21_Team cam/2026-10-21 - Session 1/.uploaded   <- written after upload
     <archive>/2026-10-21_Inside Run cam/2026-10-21 - Session 4/...
+    <archive>/2026-10-21_Team cam/2026-10-21 - Session 1/.rejected  <- Hudl refused the files (see log)
     <archive>/seen.txt                                               <- clips already copied
 Clips are kept on the archive HDD; set KEEP_DAYS_AFTER_UPLOAD to delete them after upload.
 
@@ -61,6 +62,7 @@ HUDL_EVENT = "Preseason January 10"  # scheduled event every upload is linked to
 CARD_POLL_SECONDS = 2
 UPLOAD_POLL_SECONDS = 30
 RETRY_AFTER_FAILURE_MINUTES = 5
+RETRY_AFTER_LOGIN_FAILURE_MINUTES = 60  # not more often, so Hudl doesn't lock the account
 KEEP_DAYS_AFTER_UPLOAD = None  # None = keep clips forever; a number = delete that many days after upload
 ALLOW_LOOP_DEVICES = False  # --allow-loop: treat virtual SD cards (loop devices) as cards
 
@@ -275,7 +277,8 @@ def pending_sessions(archive: Path) -> list[Path]:
         for practice in archive.iterdir()
         if practice.is_dir() and not practice.name.endswith(".partial")
         for session in practice.iterdir()
-        if session.is_dir() and not (session / ".uploaded").exists()
+        if session.is_dir()
+        and not (session / ".uploaded").exists() and not (session / ".rejected").exists()
     ]
     return sorted(sessions, key=lambda s: (s.name[:10], session_number(s)))
 
@@ -295,6 +298,17 @@ def upload_loop(archive: Path, status: Status) -> None:
         try:
             ok = hudl_upload.upload(session, session.name, VIDEO_TYPE, HUDL_EVENT,
                                     headless=True, pause=False)
+        except hudl_upload.LoginFailed as e:
+            log(f"{e} - next try in {RETRY_AFTER_LOGIN_FAILURE_MINUTES} min")
+            status.upload_error()
+            time.sleep(RETRY_AFTER_LOGIN_FAILURE_MINUTES * 60)
+            continue
+        except hudl_upload.FilesRejected:
+            # Retrying won't help; set the session aside so the queue keeps moving.
+            (session / ".rejected").touch()
+            log(f"Hudl rejected the files of {session} - skipped, upload them by hand")
+            status.upload_error()
+            continue
         except Exception:
             log("upload crashed:\n" + traceback.format_exc())
             ok = False
