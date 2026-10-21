@@ -72,6 +72,7 @@ CARD_POLL_SECONDS = 2
 UPLOAD_POLL_SECONDS = 30
 RETRY_AFTER_FAILURE_MINUTES = 5
 RETRY_AFTER_LOGIN_FAILURE_MINUTES = 60  # not more often, so Hudl doesn't lock the account
+LOGIN_HELP_CONTACT = "Lukas"  # shown on the screen when the Hudl login fails
 KEEP_DAYS_AFTER_UPLOAD = None  # None = keep clips forever; a number = delete that many days after upload
 DELETE_FROM_CARD = True  # delete clips from the SD card once they are copied and verified
 ALLOW_LOOP_DEVICES = False  # --allow-loop: treat virtual SD cards (loop devices) as cards
@@ -444,7 +445,7 @@ def upload_loop(archive: Path, status: Status) -> None:
                                     headless=True, pause=False)
         except hudl_upload.LoginFailed as e:
             log(f"{e} - next try in {RETRY_AFTER_LOGIN_FAILURE_MINUTES} min")
-            status.upload_error()
+            status.login_failed(LOGIN_HELP_CONTACT)
             time.sleep(RETRY_AFTER_LOGIN_FAILURE_MINUTES * 60)
             continue
         except hudl_upload.FilesRejected:

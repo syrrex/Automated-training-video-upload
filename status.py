@@ -58,3 +58,6 @@ class Status:
 
     def upload_error(self) -> None:
         self._show("upload", UPLOAD_ERROR, "Upload failed - will retry")
+
+    def login_failed(self, contact: str) -> None:
+        self._show("upload", UPLOAD_ERROR, f"Hudl login failed - please tell {contact}")

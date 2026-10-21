@@ -98,6 +98,7 @@ can't be a folder name).
 - `SESSION_GAP_MINUTES = 5`: a pause longer than this between two clips starts a new session
   (see "Finding the right pause length")
 - `NAMING_TIMEOUT_MINUTES = 30`: how long the touchscreen waits for names before uploading
+- `LOGIN_HELP_CONTACT = "Lukas"`: who to tell when the screen shows "Hudl login failed"
 - `READERS`: which card reader is which camera (USB port)
 - `VIDEO_TYPE = "Practice"`
 - `DELETE_FROM_CARD = True`: delete the clips from the SD card once they are copied and
@@ -251,7 +252,8 @@ orange bar at the top.
   (`SDL_VIDEODRIVER=kmsdrm` in `kiosk.service`), the buzzer, real USB card readers and real
   camera cards. Everything else is tested on a PC (WSL), including uploads to Hudl.
 - If the automatic Hudl login fails (password changed, captcha, security code), uploads
-  stop (red upload bar on the screen), the kiosk retries once an hour and the log says
+  stop, the screen shows "Hudl login failed - please tell …" (`LOGIN_HELP_CONTACT`), the
+  kiosk retries once an hour and the log says
   "automatic Hudl login failed". Fix: run `set-login` again.
 - If Hudl refuses a session's files as "invalid or corrupt", the session gets a `.rejected`
   marker and is skipped (see the log); upload those clips by hand.
